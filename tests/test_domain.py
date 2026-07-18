@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from api.podcast_service import PodcastService
 from open_notebook.ai.models import ModelManager
-from open_notebook.domain.base import RecordModel
+from open_notebook.domain.base import ObjectModel, RecordModel
 from open_notebook.domain.content_settings import ContentSettings
 from open_notebook.domain.notebook import (
     Asset,
@@ -227,6 +227,39 @@ class TestNotebookDomain:
         ):
             with pytest.raises(RuntimeError, match="source context failed"):
                 await notebook.get_context()
+
+    @pytest.mark.asyncio
+    async def test_notebook_delete_cleans_up_chat_sessions(self):
+        """Test that deleting a notebook deletes its chat sessions."""
+        notebook = Notebook(id="notebook:test_delete", name="Test", description="Test")
+        chat_sessions = [AsyncMock(), AsyncMock()]
+
+        with (
+            patch.object(Notebook, "get_notes", new_callable=AsyncMock, return_value=[]),
+            patch.object(
+                Notebook,
+                "get_chat_sessions",
+                new_callable=AsyncMock,
+                return_value=chat_sessions,
+            ),
+            patch(
+                "open_notebook.domain.notebook.repo_query",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_repo_query,
+            patch.object(ObjectModel, "delete", new_callable=AsyncMock),
+        ):
+            result = await notebook.delete()
+
+        for chat_session in chat_sessions:
+            chat_session.delete.assert_awaited_once()
+
+        assert any(
+            "DELETE refers_to" in call.args[0]
+            and str(call.args[1]["notebook_id"]) == "notebook:test_delete"
+            for call in mock_repo_query.await_args_list
+        )
+        assert result["deleted_chat_sessions"] == 2
 
 
 # ============================================================================
